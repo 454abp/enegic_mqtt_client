@@ -1,13 +1,13 @@
-import os
-import json
-import requests
-import datetime
 from pathlib import Path
+import json, datetime, requests
+from .config_loader import load_config
 
-API_BASE = os.getenv("ENEGIC_API_BASE", "https://api.enegic.com")
-USERNAME = os.getenv("ENEGIC_USERNAME", "YOUR_USERNAME")
-PASSWORD = os.getenv("ENEGIC_PASSWORD", "REDACTED")
+cfg = load_config()
+API_BASE = cfg["enegic"]["base_url"]
+USERNAME = cfg["enegic"]["username"]
+PASSWORD = cfg["enegic"]["password"]
 CACHE_FILE = Path(".token_cache.json")
+
 
 
 def _save_token(token_info: dict):
