@@ -14,3 +14,4 @@ build/
 
 # Sonstiges
 .DS_Store
+.token_cache.json
