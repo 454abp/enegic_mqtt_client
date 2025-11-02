@@ -1,61 +1,86 @@
-import json, time, paho.mqtt.client as mqtt
+import json
+import time
+
+import paho.mqtt.client as mqtt
+
 from .config_loader import load_config
 from .enegic_client import (
-    get_account_overview, get_latest_packets,
-    extract_realtime_phase_data, extract_hub_state_data
+    extract_hub_state_data,
+    get_account_overview,
+    get_latest_packets,
 )
 
 cfg = load_config()
-BROKER = cfg["mqtt"]["host"]
-PORT = cfg["mqtt"]["port"]
-TOPIC_ROOT = cfg["mqtt"]["topic_root"]
-POLL_INTERVAL = cfg["poll_interval"]
-QOS = cfg["mqtt"].get("qos", 0)
-RETAIN = cfg["mqtt"].get("retain", True)
-
 mqtt_cfg = cfg["mqtt"]
 
-# 🔐: Auth und TLS
+BROKER = mqtt_cfg["host"]
+PORT = mqtt_cfg["port"]
+TOPIC_ROOT = mqtt_cfg["topic_root"]
+QOS = mqtt_cfg.get("qos", 0)
+RETAIN = mqtt_cfg.get("retain", True)
 USERNAME = mqtt_cfg.get("username")
 PASSWORD = mqtt_cfg.get("password")
 TLS = mqtt_cfg.get("tls", False)
 
+POLL_INTERVAL = cfg["poll_interval"]
+
 
 def publish(client, topic, payload):
-    """Hilfsfunktion für sauberes Publish-Logging."""
+    """Publish a value and keep logging consistent."""
     if isinstance(payload, (dict, list)):
         payload = json.dumps(payload)
     client.publish(topic, payload, qos=QOS, retain=RETAIN)
     print(f"📤 {topic} = {payload}")
 
+
 def publish_phase_data(client, base_topic, packets):
-    """Publiziert alle vorhandenen Phase-Blöcke (Realtime, Minute, Hour, Day)."""
+    """Publish all phase packets (Realtime, Minute, Hour, Day, …)."""
     for period, block in packets.items():
         if not period.startswith("Phase"):
-            continue  # ignoriere HubState etc.
+            continue
+
         data = block.get("data", {})
-        period_topic = f"{base_topic}/phase/{period.replace('Phase', '').lower() or 'realtime'}"
+        suffix = period.replace("Phase", "").lower() or "realtime"
+        period_topic = f"{base_topic}/phase/{suffix}"
 
-        ia = data.get("hiavg", [])
-        ua = data.get("huavg", [])
-        wi = data.get("hwi")
-        wo = data.get("hwo")
+        currents = data.get("hiavg", []) or []
+        voltages = data.get("huavg", []) or []
+        energy_in = data.get("hwi")
+        energy_out = data.get("hwo")
 
-        for idx, val in enumerate(ia, start=1):
-            client.publish(f"{period_topic}/current_L{idx}", round(val, 3))
-        for idx, val in enumerate(ua, start=1):
-            client.publish(f"{period_topic}/voltage_L{idx}", round(val, 1))
-        if wi is not None:
-            client.publish(f"{period_topic}/energy_import", round(wi, 3))
-        if wo is not None:
-            client.publish(f"{period_topic}/energy_export", round(wo, 3))
+        for idx, value in enumerate(currents, start=1):
+            publish(client, f"{period_topic}/current_L{idx}", round(value, 3))
+        for idx, value in enumerate(voltages, start=1):
+            publish(client, f"{period_topic}/voltage_L{idx}", round(value, 1))
+        if energy_in is not None:
+            publish(client, f"{period_topic}/energy_import", round(energy_in, 3))
+        if energy_out is not None:
+            publish(client, f"{period_topic}/energy_export", round(energy_out, 3))
 
-        print(f"📤 {period_topic}: Iavg={ia}, Uavg={ua}, Wi={wi}, Wo={wo}")
+        print(
+            f"📤 {period_topic}: Iavg={currents}, Uavg={voltages}, "
+            f"Wi={energy_in}, Wo={energy_out}"
+        )
+
+
+def publish_hub_state(client, base_topic, device_data):
+    """Publish hub state metrics."""
+    parsed = extract_hub_state_data(device_data)
+    hub_topic = f"{base_topic}/hub"
+
+    publish(client, f"{hub_topic}/connected", parsed.get("connected"))
+    publish(client, f"{hub_topic}/state", parsed.get("charging_state"))
+    publish(client, f"{hub_topic}/rssi", parsed.get("rssi"))
+
+    for idx, value in enumerate(parsed.get("current_mA", []) or [], start=1):
+        publish(client, f"{hub_topic}/current_L{idx}", round(value / 1000.0, 3))
+
+    publish(client, f"{hub_topic}/json", parsed)
 
 
 def main():
     client = mqtt.Client()
-        # Auth aktivieren, falls gesetzt
+
     if USERNAME and PASSWORD:
         client.username_pw_set(USERNAME, PASSWORD)
 
@@ -64,54 +89,34 @@ def main():
 
     client.connect(BROKER, PORT, 60)
     print(f"✅ Verbunden mit MQTT-Broker {BROKER}:{PORT} (TLS={TLS})")
-    client.connect(BROKER, PORT, 60)
-    print("✅ Verbunden mit MQTT-Broker")
 
     while True:
         overview = get_account_overview()
         for item in overview.get("Items", []):
             item_id = item.get("ItemId")
-            name = item.get("Name")
+
             all_data = get_latest_packets(item_id)
             if not isinstance(all_data, list):
                 continue
-            device_data = next((d for d in all_data if d.get("ItemId") == item_id), None)
+
+            device_data = next(
+                (entry for entry in all_data if entry.get("ItemId") == item_id),
+                None,
+            )
             if not device_data:
                 continue
+
             packets = device_data.get("LatestPackets", {})
             base_topic = f"{TOPIC_ROOT}/{item_id}"
 
-            # --- Phase-Daten (alle Intervalle) ---
-            if any(k.startswith("Phase") for k in packets.keys()):
+            if any(key.startswith("Phase") for key in packets):
                 publish_phase_data(client, base_topic, packets)
-
-            # --- Hub-Daten ---
             elif "HubState" in packets:
-                parsed = extract_hub_state_data(device_data)
-                hub_topic = f"{base_topic}/hub"
-                publish(client, f"{hub_topic}/connected", parsed.get("connected"))
-                publish(client, f"{hub_topic}/state", parsed.get("charging_state"))
-                publish(client, f"{hub_topic}/rssi", parsed.get("rssi"))
-                currents = parsed.get("current_mA", [])
-                for idx, val in enumerate(currents, start=1):
-                    publish(client, f"{hub_topic}/current_L{idx}", round(val / 1000.0, 3))
-                publish(client, f"{hub_topic}/json", parsed)
-
-
-            elif "HubState" in packets:
-                parsed = extract_hub_state_data(device_data)
-                hub_topic = f"{base_topic}/hub"
-                publish(client, f"{hub_topic}/connected", parsed.get("connected"))
-                publish(client, f"{hub_topic}/state", parsed.get("charging_state"))
-                publish(client, f"{hub_topic}/rssi", parsed.get("rssi"))
-                currents = parsed.get("current_mA", [])
-                for idx, val in enumerate(currents, start=1):
-                    publish(client, f"{hub_topic}/current_L{idx}", round(val / 1000.0, 3))
-                publish(client, f"{hub_topic}/json", parsed)
-
+                publish_hub_state(client, base_topic, device_data)
 
         print(f"⏳ Warte {POLL_INTERVAL}s …\n")
         time.sleep(POLL_INTERVAL)
+
 
 if __name__ == "__main__":
     main()
