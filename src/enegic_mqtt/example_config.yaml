@@ -1,0 +1,29 @@
+# Beispielkonfigurationsdatei für enegic_mqtt
+# Bitte passen Sie die Werte entsprechend Ihrer Umgebung an.
+# Anstatt der Usernamen und Passwörter direkt hier einzutragen,
+# können auch Umgebungsvariablen verwendet werden (auskommentierte Zeilen).
+
+# Diese Datei zu 'config.yaml' ombennen und die Platzhalterwerte ersetzen.
+
+# Enegic API Zugangsdaten
+enegic:
+  username: <enegic_username>
+  password: <enegic_password>
+  #username: !ENV ${ENEGIC_USERNAME}
+  #password: !ENV ${ENEGIC_PASSWORD}
+  base_url: https://api.enegic.com
+
+# MQTT Verbindung
+mqtt:
+  host: address.to.mqtt.broker # hostname or IP address of your MQTT broker
+  port: 1884  # port of your MQTT broker
+  topic_root: enegic # root topic for MQTT messages
+  qos: 0
+  retain: true
+  username: <mqtt_user>  # MQTT username
+  password: <mqtt_password>  # MQTT password
+  #password: !ENV ${MQTT_PASS}  - or use environment variable instead
+  
+
+# Polling-Intervall in Sekunden
+poll_interval: 30
