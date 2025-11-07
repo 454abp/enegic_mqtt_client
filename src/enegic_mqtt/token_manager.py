@@ -11,12 +11,12 @@ CACHE_FILE = Path(".token_cache.json")
 
 
 def _save_token(token_info: dict):
-    """Speichert TokenInfo lokal in .token_cache.json"""
+    """Persist token info locally in .token_cache.json."""
     CACHE_FILE.write_text(json.dumps(token_info, indent=2))
 
 
 def _load_token() -> dict | None:
-    """Liest TokenInfo aus Cache-Datei, falls vorhanden und gültig"""
+    """Load token info from the cache file if it exists and is still valid."""
     if not CACHE_FILE.exists():
         return None
 
@@ -26,15 +26,15 @@ def _load_token() -> dict | None:
         if valid_to > datetime.datetime.now(datetime.timezone.utc):
             return data
         else:
-            print("⚠️  Token abgelaufen – hole neuen.")
+            print("⚠️  Token expired – requesting a new one.")
     except Exception as e:
-        print("⚠️  Fehler beim Lesen des Tokens:", e)
+        print("⚠️  Failed to read cached token:", e)
 
     return None
 
 
 def _request_new_token() -> dict:
-    """Fragt neuen Token bei der API an."""
+    """Request a fresh token from the API."""
     url = f"{API_BASE}/createtoken"
     payload = {"UserName": USERNAME, "Password": PASSWORD}
     resp = requests.put(url, json=payload, timeout=15)
@@ -42,22 +42,22 @@ def _request_new_token() -> dict:
     data = resp.json()
     token_info = data.get("TokenInfo")
     if not token_info:
-        raise RuntimeError("Keine TokenInfo im API-Response erhalten!")
+        raise RuntimeError("No TokenInfo found in API response!")
     _save_token(token_info)
     return token_info
 
 
 def get_token() -> str:
-    """Hauptfunktion: liefert gültigen Token (cached oder neu)"""
+    """Return a valid token, preferring the cached value when possible."""
     token_info = _load_token()
     if token_info:
         return token_info["Token"]
 
     token_info = _request_new_token()
-    print("✅ Neuer Token abgerufen.")
+    print("✅ Retrieved new token.")
     return token_info["Token"]
 
 
 if __name__ == "__main__":
     token = get_token()
-    print("Aktueller Token:", token)
+    print("Current token:", token)
