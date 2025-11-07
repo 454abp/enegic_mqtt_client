@@ -88,7 +88,7 @@ def main():
         client.tls_set()
 
     client.connect(BROKER, PORT, 60)
-    print(f"✅ Verbunden mit MQTT-Broker {BROKER}:{PORT} (TLS={TLS})")
+    print(f"✅ Connected to MQTT broker {BROKER}:{PORT} (TLS={TLS})")
 
     while True:
         overview = get_account_overview()
@@ -114,7 +114,7 @@ def main():
             elif "HubState" in packets:
                 publish_hub_state(client, base_topic, device_data)
 
-        print(f"⏳ Warte {POLL_INTERVAL}s …\n")
+        print(f"⏳ Sleeping for {POLL_INTERVAL}s …\n")
         time.sleep(POLL_INTERVAL)
 
 

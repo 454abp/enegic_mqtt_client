@@ -25,7 +25,7 @@ def get_latest_packets(item_id: int):
 
 
 def extract_realtime_phase_data(device_data: dict):
-    """Extrahiert aktuelle Spannungs- und Stromwerte aus 'PhaseRealTime'."""
+    """Extract average voltage and current values from 'PhaseRealTime'."""
     packets = device_data.get("LatestPackets", {})
     phase_rt = packets.get("PhaseRealTime", {})
     data = phase_rt.get("data", {})
@@ -39,7 +39,7 @@ def extract_realtime_phase_data(device_data: dict):
     }
 
 def extract_hub_state_data(device_data: dict):
-    """Extrahiert Statusdaten aus 'HubState' (Ladebox)."""
+    """Extract hub/charger state metrics from the 'HubState' packet."""
     packets = device_data.get("LatestPackets", {})
     hub = packets.get("HubState", {})
     data = hub.get("data", {})
@@ -55,26 +55,26 @@ def extract_hub_state_data(device_data: dict):
 
 
 def main():
-    print("📡 Hole Geräteübersicht von Enegic …")
+    print("📡 Fetching device overview from Enegic …")
     overview = get_account_overview()
     items = overview.get("Items", [])
-    print(f"✅ {len(items)} Gerät(e) gefunden")
+    print(f"✅ Found {len(items)} device(s)")
 
     for item in items:
         item_id = item.get("ItemId")
         name = item.get("Name")
-        print(f"\n➡️  Live-Daten für {name} (ItemId={item_id})")
+        print(f"\n➡️  Live data for {name} (ItemId={item_id})")
 
-        # GET returns a list -> nimm den ersten Eintrag
+        # GET returns a list -> take the first entry
         all_data = get_latest_packets(item_id)
         if not isinstance(all_data, list) or not all_data:
-            print("⚠️  Keine Daten erhalten")
+            print("⚠️  No data returned")
             continue
 
-        # Richtiges Gerät aus Liste filtern
+        # Filter the correct device from the list
         device_data = next((d for d in all_data if d.get("ItemId") == item_id), None)
         if not device_data:
-            print(f"⚠️  Kein Datensatz für ItemId={item_id} gefunden")
+            print(f"⚠️  No record found for ItemId={item_id}")
             continue
 
         parsed = {}
@@ -86,8 +86,10 @@ def main():
 
         elif "HubState" in packets:
             parsed = extract_hub_state_data(device_data)
-            print(f"🔌 Hub {parsed['charger_id']}  |  Connected: {parsed['connected']}  |  State: {parsed['charging_state']}")
-            print(f"Ströme (mA): {parsed['current_mA']}")
+            print(
+                f"🔌 Hub {parsed['charger_id']}  |  Connected: {parsed['connected']}  |  State: {parsed['charging_state']}"
+            )
+            print(f"Currents (mA): {parsed['current_mA']}")
 
 
 if __name__ == "__main__":
