@@ -1,5 +1,7 @@
 # enegic_mqtt
 
+> ⚡️ Inspired by [PetrolHead2's Perific Meter project](https://github.com/PetrolHead2/perific-meter/tree/new-openapi) – the idea to interface with the Enegic API was proudly borrowed and adapted for this setup.
+
 Small Python tool to poll data from the Enegic API and publish it to an MQTT broker.
 
 ---
@@ -226,6 +228,97 @@ influx -database 'energy' -execute 'SELECT * FROM enegic ORDER BY time DESC LIMI
 | Telegraf errors     | MQTT not reachable or wrong topic   | Verify topics and Docker network            |
 | Influx not updating | Wrong database or output plugin     | Confirm `outputs.influxdb` vs `influxdb_v2` |
 | Data gaps           | Script stopped or API timeout       | Check `docker ps` and logs                  |
+
+---
+
+## 🕒 Enegic History Reader
+
+### Purpose
+
+The **Enegic History Reader** supplements the realtime MQTT publisher by fetching historical or missing measurements from the Enegic API and publishing them to MQTT.
+This helps fill potential data gaps caused by network issues, reboots, or API rate limits.
+
+### Structure
+
+```
+/srv/stack/enegic/
+├── src/enegic_mqtt/mqtt_publisher.py   # realtime publisher
+├── src/enegic_mqtt/history_reader.py   # new history backfill script
+├── requirements.txt
+├── Dockerfile
+└── (main docker-compose.yml lives one level up)
+```
+
+### Docker Integration
+
+Both the realtime and history services share the same Docker image and dependencies.
+
+Add the following to the main `/srv/stack/docker-compose.yml`:
+
+```yaml
+  enegic-realtime:
+    build: ./enegic
+    container_name: enegic-realtime
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Stockholm
+      MQTT_BROKER: mqtt
+      MQTT_PORT: 1883
+    networks:
+      - ha
+    command: ["python", "-m", "enegic_mqtt.mqtt_publisher"]
+
+  enegic-history:
+    build: ./enegic
+    container_name: enegic-history
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Stockholm
+      MQTT_BROKER: mqtt
+      MQTT_PORT: 1883
+    networks:
+      - ha
+    command: ["python", "-m", "enegic_mqtt.history_reader"]
+```
+
+Then rebuild and start:
+
+```bash
+cd /srv/stack
+docker compose build enegic-realtime enegic-history
+docker compose up -d enegic-realtime enegic-history
+```
+
+### Scheduling
+
+`history_reader.py` includes a simple internal loop:
+
+```python
+while True:
+    fetch_missing_minutes()
+    time.sleep(15 * 60)
+```
+
+This executes the historical data sync every 15 minutes.
+Alternatively, you can trigger it externally (e.g. via cron) if you prefer.
+
+### Logging
+
+Logs are available via:
+
+```bash
+docker logs -f enegic-realtime
+docker logs -f enegic-history
+```
+
+### Rebuild & Updates
+
+If you change Python code or dependencies:
+
+```bash
+docker compose build --no-cache enegic-realtime enegic-history
+docker compose up -d
+```
 
 ---
 
