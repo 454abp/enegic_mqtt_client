@@ -26,4 +26,8 @@ mqtt:
   
 
 # Polling-Intervall in Sekunden
-poll_interval: 30
+# 20 Sec might be the silver bullet especially when aiming for poer tariff 
+# (Effekttarif in Swedish). Many grid operators calculate the power tariff based
+# on average consumption over 15 minutes. Ensuring to have around 3 data points
+# per minute ensure to always have at least one data point during that time
+poll_interval: 20
