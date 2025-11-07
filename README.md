@@ -89,13 +89,13 @@ mqtt:
 ## 📊 Data Flow Overview
 
 ```mermaid
-graph TD
-  A[Enegic API] --> B[Python Script]
-  B --> C[MQTT Broker (Mosquitto)]
-  C --> D[Telegraf]
-  D --> E[InfluxDB]
-  E --> F[Grafana]
-  E --> G[OpenHAB]
+graph TD;
+  A["Enegic API"] --> B["Python Script"];
+  B --> C["MQTT Broker (Mosquitto)"];
+  C --> D["Telegraf"];
+  D --> E["InfluxDB"];
+  E --> F["Grafana"];
+  E --> G["OpenHAB"];
 ```
 
 **Description:**
