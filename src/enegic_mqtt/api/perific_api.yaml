@@ -4,6 +4,7 @@ info:
   version: 1.0.0
 servers:
   - url: https://api.enegic.com
+
 paths:
   /createtoken:
     put:
@@ -34,13 +35,6 @@ paths:
       operationId: getaccountoverview
       security:
         - x_authorization: []
-      responses:
-        "200":
-          description: A list of devices associated with the account.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AccountOverviewResponse'
       parameters:
         - in: header
           name: Content-Type
@@ -48,6 +42,13 @@ paths:
             type: string
           required: true
           example: application/json
+      responses:
+        "200":
+          description: A list of devices associated with the account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountOverviewResponse'
 
   /getlatestpackets:
     put:
@@ -73,6 +74,170 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/LatestItemPackets'
+
+  /getphasedata:
+    put:
+      summary: Retrieve historical phase data
+      operationId: getphasedata
+      security:
+        - x_authorization: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ItemId, StartTime, EndTime, Resolution, TimeZone]
+              properties:
+                ItemId:
+                  type: string
+                  example: "1724866924847"
+                StartTime:
+                  type: string
+                  format: date-time
+                  example: "2025-11-03T00:00:00+01:00"
+                EndTime:
+                  type: string
+                  format: date-time
+                  example: "2025-11-05T00:00:00+01:00"
+                Resolution:
+                  type: string
+                  enum: [Minute, Hour, Day]
+                  example: "Hour"
+                GroupBy:
+                  type: string
+                  example: "Day"
+                TimeZone:
+                  type: string
+                  example: "Europe/Stockholm"
+      responses:
+        "200":
+          description: Historical data retrieved successfully.
+
+  /addupdateaminareportersettings:
+    post:
+      summary: Add or update charger (reporter) settings
+      operationId: addupdateaminareportersettings
+      description: >
+        Controls the charging mode for a reporter (charger).  
+        Use Mode = "Open" for unrestricted charging,  
+        Mode = "Price" for OptiCharge price optimization,  
+        and Mode = "Manual" for manual time windows.
+      security:
+        - x_authorization: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReporterSettingsRequest'
+      responses:
+        "200":
+          description: Charger settings successfully updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReporterSettingsResponse'
+
+  /getreporterpriceschemasettings:
+    put:
+      summary: Get OptiCharge price schema settings
+      operationId: getreporterpriceschemasettings
+      security:
+        - x_authorization: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ItemId:
+                  type: string
+                  example: "1724866961362"
+      responses:
+        "200":
+          description: Current price schema settings for the reporter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceSchemaSettingsResponse'
+
+  /setreporterpriceschemasettings:
+    put:
+      summary: Update OptiCharge price schema settings
+      operationId: setreporterpriceschemasettings
+      description: >
+        Updates the price schema configuration for a specific reporter (charger).
+        The Parameters field must be a valid JSON string, escaped as required.
+      security:
+        - x_authorization: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ItemId, Parameters]
+              properties:
+                ItemId:
+                  type: string
+                  example: "1724866961362"
+                Parameters:
+                  type: string
+                  description: >
+                    JSON string containing OptiCharge configuration parameters.  
+                    Example structure:
+                    {"MaxPrice":120,"MinPrice":-1,"WantedHours":4,"PriceArea":"SE3","ChargingIntervals":[{"StartCharging":"23:00","EndCharging":"05:00"}],"Inverted":false,"SortDescending":false}
+                  example: |
+                    {"MaxPrice":120,"MinPrice":-1,"WantedHours":4,"PriceArea":"SE3","ChargingIntervals":[{"StartCharging":"23:00","EndCharging":"05:00"}],"Inverted":false,"SortDescending":false}
+      responses:
+        "200":
+          description: Price schema updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceSchemaSettingsResponse'
+
+  /calculatepriceschemas:
+    post:
+      summary: Trigger price schema recalculation
+      operationId: calculatepriceschemas
+      security:
+        - x_authorization: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ReporterIds:
+                  type: array
+                  items:
+                    type: string
+                  example: ["1724866961362"]
+      responses:
+        "200":
+          description: Price schema recalculated successfully.
+
+  /gethubstate/{id}:
+    get:
+      summary: Get hub (charger) state
+      operationId: gethubstate
+      security:
+        - x_authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "1724866961362"
+      responses:
+        "200":
+          description: Hub state retrieved successfully.
+
 
 components:
   securitySchemes:
@@ -134,6 +299,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Item'
+
     LatestItemPackets:
       type: object
       properties:
@@ -152,46 +318,84 @@ components:
           properties:
             imin:
               type: array
-              items:
-                type: number
+              items: { type: number }
             imax:
               type: array
-              items:
-                type: number
+              items: { type: number }
             iavg:
               type: array
-              items:
-                type: number
+              items: { type: number }
             qmin:
               type: array
-              items:
-                type: number
+              items: { type: number }
             qmax:
               type: array
-              items:
-                type: number
+              items: { type: number }
             huavg:
               type: array
-              items:
-                type: number
+              items: { type: number }
             hiavg:
               type: array
-              items:
-                type: number
+              items: { type: number }
             pavg:
               type: array
-              items:
-                type: number
+              items: { type: number }
             pf:
               type: array
-              items:
-                type: number
+              items: { type: number }
             freq:
               type: array
-              items:
-                type: number
+              items: { type: number }
             energy:
               type: array
-              items:
-                type: number
+              items: { type: number }
           additionalProperties: true
+
+    ReporterSettingsRequest:
+      type: object
+      required: [ReporterId, UserSettings, UserId]
+      properties:
+        ReporterId:
+          type: string
+          example: "1724866961362"
+        UserSettings:
+          type: string
+          description: >
+            JSON string specifying mode and related parameters.
+            Each mode accepts its own nested configuration.
+          examples:
+            openMode:
+              summary: Open mode
+              value: |
+                {"Common":{"Mode":"Open"}}
+            priceMode:
+              summary: OptiCharge (price-controlled)
+              value: |
+                {"Common":{"Mode":"Price"},"OptiCharge":{"Earliest":22,"Latest":23,"Hours":4}}
+            manualMode:
+              summary: Manual schedule
+              value: |
+                {"Common":{"Mode":"Manual"},"ManualCharge":{"Schedules":[{"Start":9,"End":10},{"Start":11,"End":13}]}}
+        UserId:
+          type: integer
+          example: 1071343
+
+    ReporterSettingsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        message:
+          type: string
+          example: Settings updated successfully
+
+    PriceSchemaSettingsResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        message:
+          type: string
+          example: Price schema updated successfully
