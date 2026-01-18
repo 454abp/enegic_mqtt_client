@@ -12,4 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
 
-CMD ["python", "-m", "enegic_mqtt.mqtt_publisher"]
+# Run module name from ENV
+ENV MODULE=enegic_mqtt.mqtt_publisher
+CMD ["sh", "-c", "python -m $MODULE"]

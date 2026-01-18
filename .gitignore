@@ -15,5 +15,6 @@ build/
 # Sonstiges
 .DS_Store
 .token_cache.json
+.site_cache.json
 config.yaml
 config.yaml

@@ -12,6 +12,10 @@ enegic:
   #username: !ENV ${ENEGIC_USERNAME}
   #password: !ENV ${ENEGIC_PASSWORD}
   base_url: https://api.enegic.com
+  # Optional: select a specific site for the history reader
+  # site_id: 12345
+  # Optional: dedicated API token for /v1 endpoints
+  # history_token: !ENV ${ENEGIC_HISTORY_TOKEN}
 
 # MQTT Verbindung
 mqtt:
