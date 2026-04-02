@@ -16,6 +16,7 @@ I am not used to work in non POSEX. So in Linux or Mac please use the commands n
 ## 🔧 Setup
 
 ```bash
+export PYTHONPATH="$PWD/src"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -97,13 +98,13 @@ docker run -d \
 ```yaml
 enegic:
   token: "YOUR_ENEGIC_API_TOKEN"
-  site_id: 1724866924847
+  site_id: "YOUR_SITE_ID"
   poll_interval: 30
   timeout: 10
 
 mqtt:
-  host: 192.168.3.233
-  port: 1883
+  host: "MQTT host"
+  port: "MQTT port"
   topic_prefix: "enegic"
   qos: 0
   retain: false
@@ -162,7 +163,9 @@ graph TD;
   database = "energy"
 ```
 
-> 💡 Telegraf works with both **InfluxDB 1.x and 2.x**; configuration differs only in the output plugin (for 2.x use `[[outputs.influxdb_v2]]`).
+> 💡 Telegraf works with both **InfluxDB 1.x and 2.x**; configuration differs only in the output plugin (for 2.x use `[[outputs.influxdb_v2]]`). 
+
+> ⚠️ In order to use the history reader a recent version of telegraf is needed. It has been tested with 1.36
 
 ---
 

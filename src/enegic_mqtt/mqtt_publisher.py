@@ -33,6 +33,7 @@ def publish(client, topic, payload):
     print(f"📤 {topic} = {payload}")
 
 
+
 def publish_phase_data(client, base_topic, packets):
     """Publish all phase packets (Realtime, Minute, Hour, Day, …)."""
     for period, block in packets.items():
