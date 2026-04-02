@@ -1,322 +1,312 @@
-# ------------------------------------------------------------
-# Original imports and helpers restored
-# ------------------------------------------------------------
 import argparse
-import datetime
+import datetime as dt
 import json
 import logging
-from time import sleep
+import time
+from typing import Any
+
 import requests
+import paho.mqtt.client as mqtt
 
 from .config_loader import load_config
 from .enegic_client import get_account_overview
-from .token_manager import get_token
 from .site_cache import cache_site_id, load_cached_site_id
+from .token_manager import get_token, invalidate_token
 
-cfg = load_config()
-enegic_cfg = cfg["enegic"]
+log = logging.getLogger(__name__)
 
-API_BASE = enegic_cfg.get("base_url", "https://api.enegic.com").rstrip("/")
-HISTORY_TIMEOUT = enegic_cfg.get("history_timeout", 10)
-CONFIGURED_SITE_ID = enegic_cfg.get("site_id")
-STATIC_HISTORY_TOKEN = enegic_cfg.get("history_token")
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-# ------------------------------------------------------------
-# Helpers from original file
-# ------------------------------------------------------------
-def parse_date(s):
+def parse_date(s: str) -> dt.datetime:
     try:
         if len(s) == 10:
-            return datetime.datetime.fromisoformat(s).replace(tzinfo=datetime.timezone.utc)
-        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
-        raise argparse.ArgumentTypeError(f"Invalid date/time: {s}")
+            return dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc)
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception as e:
+        raise argparse.ArgumentTypeError(f"Invalid date/time: {s}") from e
 
 
-def fetch_samples(item_id, token, start, end, resolution="Hour", group_by="Day", timeout=10):
-    url = f"{API_BASE}/getphasedata"
-    headers = {"X-Authorization": token, "Content-Type": "application/json"}
+def _apply_auth(headers: dict | None, token: str) -> dict:
+    h = dict(headers or {})
+    # Enegic endpoints vary; X-Authorization is commonly required.
+    h["X-Authorization"] = token
+    h["Authorization"] = f"Bearer {token}"
+    h.setdefault("Accept", "*/*")
+    h.setdefault("User-Agent", "enegic_history_reader/1.0")
+    h.setdefault("Content-Type", "application/json")
+    return h
+
+
+def _request(method: str, url: str, *, timeout: int, headers: dict | None = None, **kwargs) -> requests.Response:
+    token = get_token()
+    h = _apply_auth(headers, token)
+    resp = requests.request(method, url, headers=h, timeout=timeout, **kwargs)
+
+    if resp.status_code == 401:
+        invalidate_token()
+        token = get_token(force_refresh=True)
+        h = _apply_auth(headers, token)
+        resp = requests.request(method, url, headers=h, timeout=timeout, **kwargs)
+
+    resp.raise_for_status()
+    return resp
+
+
+def fetch_phase_data(
+    api_base: str,
+    item_id: int,
+    start: dt.datetime,
+    end: dt.datetime,
+    *,
+    resolution: str = "Hour",
+    group_by: str = "Day",
+    timezone: str = "Europe/Stockholm",
+    timeout: int = 15,
+) -> Any:
+    url = f"{api_base}/getphasedata"
     payload = {
         "ItemID": str(item_id),
         "StartTime": start.isoformat(),
         "EndTime": end.isoformat(),
         "Resolution": resolution.capitalize(),
         "GroupBy": group_by.capitalize(),
-        "TimeZone": "Europe/Stockholm",
+        "TimeZone": timezone,
     }
-    resp = requests.put(url, headers=headers, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    return resp.json()
+    return _request("PUT", url, timeout=timeout, json=payload).json()
 
 
-def resolve_site_id(cli_site_id, history_token):
+def resolve_site_id(cli_site_id: int | None, configured_site_id: int | None) -> int:
     if cli_site_id:
         cache_site_id(cli_site_id, "cli")
         return cli_site_id
-    if CONFIGURED_SITE_ID:
-        cache_site_id(CONFIGURED_SITE_ID, "config")
-        return CONFIGURED_SITE_ID
+
+    if configured_site_id:
+        cache_site_id(configured_site_id, "config")
+        return configured_site_id
 
     cached = load_cached_site_id()
     if cached:
-        site_id, _ = cached
-        return site_id
+        sid, _src = cached
+        return int(sid)
 
     overview = get_account_overview()
     for item in overview.get("Items", []):
-        site_id = (
-            item.get("SiteId") or item.get("SiteID") or item.get("ItemId") or item.get("ItemID")
-        )
-        if site_id:
-            cache_site_id(site_id, "auto")
-            return site_id
-
-    sid = discover_site_id_via_history_api(history_token)
-    if sid:
-        return sid
+        sid = item.get("SiteId") or item.get("SiteID") or item.get("ItemId") or item.get("ItemID")
+        if sid:
+            cache_site_id(int(sid), "auto")
+            return int(sid)
 
     raise RuntimeError("No site_id found. Provide one via --site-id or config.enegic.site_id.")
 
 
-def resolve_history_token():
-    # Prefer explicit token from config
-    if STATIC_HISTORY_TOKEN:
-        return STATIC_HISTORY_TOKEN
-    # Always fetch a fresh token (avoid stale token_cache)
-    return get_token()
-    if STATIC_HISTORY_TOKEN:
-        return STATIC_HISTORY_TOKEN
-    return get_token()
+def iter_samples(payload: Any):
+    """
+    Normalizes Enegic history responses into an iterator of samples.
+    We support:
+      - list of day-blocks: [{"dt":..., "data":[{"ts":..., "data":{...}}, ...]}, ...]
+      - dict with "data" as day-block list
+      - dict with "samples" as flat list
+      - flat list of samples
+    """
+    if isinstance(payload, dict):
+        if isinstance(payload.get("data"), list):
+            payload = payload["data"]
+        elif isinstance(payload.get("samples"), list):
+            for s in payload["samples"]:
+                yield s
+            return
 
-
-def discover_site_id_via_history_api(token):
-    url = f"{API_BASE}/v1/sites"
-    headers = {"Authorization": f"Bearer {token}"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=HISTORY_TIMEOUT)
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception:
-        return None
-
-    rows = []
     if isinstance(payload, list):
-        rows = payload
-    elif isinstance(payload, dict):
-        for key in ("sites", "Sites", "items", "Items"):
-            if isinstance(payload.get(key), list):
-                rows = payload[key]
-                break
+        # day-block style
+        if payload and isinstance(payload[0], dict) and "data" in payload[0] and isinstance(payload[0]["data"], list):
+            for day in payload:
+                for sample in day.get("data", []):
+                    yield sample
+            return
 
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        for key in ("siteId", "SiteId", "site_id", "id", "ID"):
-            site_id = row.get(key)
-            if site_id:
-                cache_site_id(site_id, "history_api")
-                return site_id
-    return None
-
-
-def print_response(data):
-    if not isinstance(data, list):
-        print(json.dumps(data, indent=2))
+        # flat list style
+        for s in payload:
+            yield s
         return
-    for day in data:
-        date = day.get("dt")
-        for entry in day.get("data", []):
-            ts = entry.get("ts")
-            vals = entry.get("data", {})
-            hiavg = vals.get("hiavg")
-            huavg = vals.get("huavg")
-            hwp1 = vals.get("hwp1")
-            print(f"{ts}  Iavg={hiavg}  Uavg={huavg}  P1={hwp1}")
 
-# ------------------------------------------------------------
-# MQTT additions remain below
-# ------------------------------------------------------------, Influx line protocol, and the history reader logic here.
-# Added MQTT output support (generic for GitHub usage).
+    # unknown structure
+    return
 
-import paho.mqtt.client as mqtt
 
 class MQTTPublisher:
-    def __init__(self, host, port=1883, base_topic="enegic/history"):
+    def __init__(self, host: str, port: int = 1883, base_topic: str = "enegic/history"):
         self.host = host
         self.port = port
         self.base_topic = base_topic.rstrip("/")
         self.client = mqtt.Client()
         self.client.connect(self.host, self.port, keepalive=60)
 
-    def publish_point(self, site_id, timestamp, payload_dict):
-        """
-        Publishes a JSON payload like:
-        {
-            "value": 8123,
-            "timestamp": 1731525900,
-            "L1": 2.3,
-            "L2": 1.8,
-            "L3": 3.1
-        }
-        Topic example:
-        enegic/history/<site_id>/minute/power
-        """
-        topic = f"{self.base_topic}/{site_id}/minute/power"
-        self.client.publish(topic, json.dumps(payload_dict), qos=0, retain=False)
+    def publish_json(self, topic: str, payload_obj: dict):
+        self.client.publish(topic, json.dumps(payload_obj), qos=0, retain=False)
 
-import json
-# In main() we will later add:
-#   --output mqtt
-#   --mqtt-host
-#   --mqtt-port
-# and wire it to MQTTPublisher
+    
+    
+    def publish_as_history_topics(self, device_id: int, resolution: str, sample: dict):
+        ts = sample.get("ts")
+        vals = sample.get("data", {}) or {}
+        res = resolution.lower()
 
-# The next updates will modify functions and add modes for influx/mqtt output.
+        def pub(metric: str, value: float | int):
+            topic = f"{self.base_topic}/{device_id}/phase/{res}/{metric}"
+            self.publish_json(topic, {"ts": ts, "value": value})
 
-# ------------------------------------------------------------
-# CLI extensions for MQTT output
-# ------------------------------------------------------------
-def extend_argparser_for_mqtt(parser):
-    parser.add_argument("--output", choices=["console", "mqtt"], default="console",
-                        help="Select output method: console (default) or mqtt")
-    parser.add_argument("--mqtt-host", default="localhost",
-                        help="MQTT broker hostname or IP")
-    parser.add_argument("--mqtt-port", type=int, default=1883,
-                        help="MQTT broker port")
-    parser.add_argument("--mqtt-topic-base", default="enegic/history",
-                        help="Base MQTT topic for publishing historical data")
-    return parser
+        hiavg = vals.get("hiavg")
+        if isinstance(hiavg, list) and len(hiavg) >= 3:
+            pub("current_L1", hiavg[0]); pub("current_L2", hiavg[1]); pub("current_L3", hiavg[2])
 
-# ------------------------------------------------------------
-# Output dispatcher for sending historic samples to MQTT
-# ------------------------------------------------------------
-def handle_output_mqtt(publisher: MQTTPublisher, site_id: int, sample: dict):
-    """
-    sample is expected to be a dict from the Enegic API like:
-    {
-        "ts": 1731525900,
-        "data": {
-            "hiavg": ...,   # current / I
-            "huavg": ...,   # voltage / U
-            "hwp1": ...,    # watt / power
-        }
-    }
-    """
+        huavg = vals.get("huavg")
+        if isinstance(huavg, list) and len(huavg) >= 3:
+            pub("voltage_L1", huavg[0]); pub("voltage_L2", huavg[1]); pub("voltage_L3", huavg[2])
+
+    
+    def publish_sample(self, site_id: int, resolution: str, sample: dict):
+        ts = sample.get("ts")
+
+        # If ts has no timezone, assume UTC and append Z
+        if isinstance(ts, str) and ("Z" not in ts) and ("+" not in ts) and ("-" not in ts[10:]):
+        ts = ts + "Z"
+
+        vals = sample.get("data", {}) if isinstance(sample, dict) else {}
+
+        payload = {"ts": ts, "data": vals}
+        topic = f"{self.base_topic}/{site_id}/{resolution.lower()}"
+        self.publish_json(topic, payload)
+
+
+
+def publish_as_live_topics(self, device_id: str, resolution: str, sample: dict):
     ts = sample.get("ts")
-    vals = sample.get("data", {})
+    vals = sample.get("data", {}) or {}
+    res = resolution.lower()
 
-    payload = {
-        "timestamp": ts,
-    }
+    def pub(metric: str, value: float | int):
+        topic = f"enegic/{device_id}/phase/{res}/{metric}"
+        self.publish_json(topic, {"ts": ts, "value": value})
 
-    # Map Enegic fields into generic MQTT payload fields
-    if "hwp1" in vals:
-        payload["power"] = vals["hwp1"]
-    if "hiavg" in vals:
-        payload["current_avg"] = vals["hiavg"]
-    if "huavg" in vals:
-        payload["voltage_avg"] = vals["huavg"]
+    # Example mapping (adjust to your API keys)
+    # If hiavg/huavg are per-phase lists:
+    hiavg = vals.get("hiavg")
+    if isinstance(hiavg, list) and len(hiavg) >= 3:
+        pub("current_L1", hiavg[0]); pub("current_L2", hiavg[1]); pub("current_L3", hiavg[2])
 
-    publisher.publish_point(site_id, ts, payload)
+    huavg = vals.get("huavg")
+    if isinstance(huavg, list) and len(huavg) >= 3:
+        pub("voltage_L1", huavg[0]); pub("voltage_L2", huavg[1]); pub("voltage_L3", huavg[2])
 
-# ------------------------------------------------------------
-# Integrate MQTT logic into main()
-# ------------------------------------------------------------
-from .config_loader import load_config  # ensure imports exist
-from .enegic_client import get_account_overview
-from .token_manager import get_token
-from .site_cache import cache_site_id, load_cached_site_id
+    # If you have totals for import/export you want:
+    if isinstance(vals.get("energy_import"), (int,float)):
+        pub("energy_import", vals["energy_import"])
+    if isinstance(vals.get("energy_export"), (int,float)):
+        pub("energy_export", vals["energy_export"])
 
 def main():
-    import argparse
-    import datetime
-    import logging
-    from time import sleep
+    cfg = load_config()
+    enegic_cfg = cfg["enegic"]
 
-    parser = argparse.ArgumentParser(description="Fetch historical Enegic data and output via console or MQTT")
-    parser.add_argument("--from", dest="from_", type=parse_date, required=True)
-    parser.add_argument("--to", dest="to_", type=parse_date, default=datetime.datetime.now(datetime.timezone.utc))
-    parser.add_argument("--resolution", choices=["minute", "hour", "day"], default="minute")
+    api_base = enegic_cfg.get("base_url", "https://api.enegic.com").rstrip("/")
+    timeout = int(enegic_cfg.get("history_timeout", 15))
+    configured_site_id = enegic_cfg.get("site_id")
+
+    parser = argparse.ArgumentParser(description="Fetch historical Enegic phase data (chunked).")
+
+    # default last 30 days
+    now = dt.datetime.now(dt.timezone.utc)
+    default_from = now - dt.timedelta(days=30)
+
+    parser.add_argument("--from", dest="from_", type=parse_date, default=default_from)
+    parser.add_argument("--to", dest="to_", type=parse_date, default=now)
+
+    parser.add_argument("--site-id", type=int, help="Override site id; otherwise auto-detect")
+    parser.add_argument("--resolution", choices=["minute", "hour", "day"], default="hour")
+    parser.add_argument("--group-by", choices=["day", "hour", "none"], default="day")
     parser.add_argument("--chunk-hours", type=int, default=24)
-    parser.add_argument("--json", action="store_true", help="print raw JSON output (console mode only)")
-    parser.add_argument("--site-id", type=int, help="override site id; otherwise auto-detect")
-    parser.add_argument("--sleep-seconds", type=int, default=1, help="delay between successful chunk requests")
-    parser.add_argument("--retry-seconds", type=int, default=5, help="delay after a failed request")
+    parser.add_argument("--sleep-seconds", type=int, default=1)
+    parser.add_argument("--retry-seconds", type=int, default=5)
 
-    # extend parser (MQTT flags)
-    extend_argparser_for_mqtt(parser)
+    parser.add_argument("--output", choices=["console", "json", "mqtt"], default="console")
+    parser.add_argument("--mqtt-host", default="localhost")
+    parser.add_argument("--mqtt-port", type=int, default=1883)
+    parser.add_argument("--mqtt-topic-base", default="enegic/history")
+
     args = parser.parse_args()
 
-    token = resolve_history_token()
-    site_id = resolve_site_id(args.site_id, token)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    # prepare MQTT if selected
-    mqtt_publisher = None
+    site_id = resolve_site_id(args.site_id, configured_site_id)
+    log.info("Using site_id=%s", site_id)
+
+    mqtt_pub = None
     if args.output == "mqtt":
-        mqtt_publisher = MQTTPublisher(
-            host=args.mqtt_host,
-            port=args.mqtt_port,
-            base_topic=args.mqtt_topic_base,
-        )
+        mqtt_pub = MQTTPublisher(args.mqtt_host, args.mqtt_port, args.mqtt_topic_base)
+        log.info("MQTT output enabled: %s:%s topic=%s", args.mqtt_host, args.mqtt_port, args.mqtt_topic_base)
 
-    current = args.from_
-    while current < args.to_:
-        chunk_end = min(current + datetime.timedelta(hours=args.chunk_hours), args.to_)
-        logging.info(f"Fetching {current} → {chunk_end}")
+    # normalize group_by
+    group_by = args.group_by
+    if group_by == "none":
+        group_by = "Day"  # API seems to like a value; Day is safest
+    else:
+        group_by = group_by.capitalize()
+
+    start = args.from_
+    end = args.to_
+    if start >= end:
+        raise SystemExit("--from must be < --to")
+
+    current = start
+    while current < end:
+        chunk_end = min(current + dt.timedelta(hours=args.chunk_hours), end)
+        log.info("Fetching %s -> %s", current.isoformat(), chunk_end.isoformat())
+
         try:
-            data = fetch_samples(
+            payload = fetch_phase_data(
+                api_base,
                 site_id,
-                token,
                 current,
                 chunk_end,
-                args.resolution,
-                "Day",  # can adjust if needed
-                HISTORY_TIMEOUT,
+                resolution=args.resolution.capitalize(),
+                group_by=group_by,
+                timezone="Europe/Stockholm",
+                timeout=timeout,
             )
 
-            # Normalize history API responses (dict with 'samples' or raw list)
-            if isinstance(data, list):
-                samples = data
+            if args.output == "json":
+                print(json.dumps(payload, indent=2))
+
             else:
-                samples = data.get("samples", [])
+                for sample in iter_samples(payload) or []:
+                    if args.output == "mqtt" and mqtt_pub:
+                        mqtt_pub.publish_as_history_topics(site_id, args.resolution, sample)
+                    else:
+                        ts = sample.get("ts")
+                        vals = sample.get("data", {})
+                        hiavg = vals.get("hiavg")
+                        huavg = vals.get("huavg")
+                        p_import = vals.get("hwpi")  # list (per phase)
+                        p_export = vals.get("hwpo")
+                        print(f"{ts}  Iavg={hiavg}  Uavg={huavg}  P_import={p_import}  P_export={p_export}")
+                        p_total = sum(vals.get("hwpi") or [])
 
-            if args.output == "console":
-                if args.json:
-                    print(json.dumps(data, indent=2))
-                else:
-                    for s in samples:
-                        print_response([s])
-
-            elif args.output == "mqtt":
-                for s in samples:
-                    handle_output_mqtt(mqtt_publisher, site_id, s)
-
-            sleep(args.sleep_seconds)
+            time.sleep(args.sleep_seconds)
+            current = chunk_end
 
         except Exception as e:
-            # Auto-refresh token on 401 responses
-            if "401" in str(e):
-                logging.warning("401 detected — refreshing token and retrying chunk")
-                # fetch fresh token and persist
-                token = get_token(force_refresh=True)
-                # continue with next retry loop
-                continue
-                logging.warning("401 detected — refreshing token and retrying chunk")
-                token = get_token()
+            msg = str(e)
+            if "401" in msg or "Unauthorized" in msg:
+                log.warning("401 detected - clearing token and retrying same chunk")
+                invalidate_token()
+                # next loop iteration retries same chunk
+                time.sleep(1)
                 continue
 
-            logging.error(f"Error fetching chunk {current} → {chunk_end}: {e}")
-            sleep(args.retry_seconds)
+            log.error("Error fetching chunk %s -> %s: %s", current, chunk_end, e)
+            time.sleep(args.retry_seconds)
 
-        current = chunk_end
+    log.info("Finished.")
 
-    logging.info("Finished fetching historical data.")
 
-# ------------------------------------------------------------
-# Entry point
-# ------------------------------------------------------------
 if __name__ == "__main__":
     main()
-
