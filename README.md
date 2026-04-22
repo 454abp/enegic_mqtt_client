@@ -1,13 +1,11 @@
-# enegic_mqtt
-
+# Enegic (Perific)  to MQTT client
 > ⚡️ Inspired by [PetrolHead2's Perific Meter project](https://github.com/PetrolHead2/perific-meter/tree/new-openapi) – the idea to interface with the Enegic API was proudly borrowed and adapted for this setup.
 
 Small Python tool to poll data from the Enegic API and publish it to an MQTT broker. 
 
 In my implementation (lets call it the reference implementation) i then read with Telegraf and write the data to Influx from where i can access it with Grafana. As there sometimes are gaps in the readings due to various outages I would like to add gaps and also history from before the script to Influxdb as well. See Section about History Reader below. I even have tried to specify the API in the OpenAPI format but not implemented the most of the methods.
 
-I am not used to work in non POSEX. So in Linux or Mac please use the commands noted down. Otherwise please use the commands your OS supports. 
-
+I am not used to work in non-POSEX environments. So in Linux or Mac please use the commands noted down. Otherwise please use the commands your OS supports. 
  
  > ⚠️ DISCLAIMER: I addition of course please see it as a highly experimental functionality. Especially the functionality in the API when it comes to actually control load balancing and charging can lead to unforseen conflicts with other members of the household or increased energy bill. ⚠️
 
