@@ -133,11 +133,14 @@ def iter_samples(payload: Any):
 
 
 class MQTTPublisher:
-    def __init__(self, host: str, port: int = 1883, base_topic: str = "enegic/history"):
+    def __init__(self, host: str, port: int = 1883, base_topic: str = "enegic/history",
+                 username: str | None = None, password: str | None = None):
         self.host = host
         self.port = port
         self.base_topic = base_topic.rstrip("/")
         self.client = mqtt.Client()
+        if username:
+            self.client.username_pw_set(username, password)
         self.client.connect(self.host, self.port, keepalive=60)
 
     def publish_json(self, topic: str, payload_obj: dict):
@@ -241,7 +244,12 @@ def main():
 
     mqtt_pub = None
     if args.output == "mqtt":
-        mqtt_pub = MQTTPublisher(args.mqtt_host, args.mqtt_port, args.mqtt_topic_base)
+        mqtt_cfg = cfg.get("mqtt", {})
+        mqtt_pub = MQTTPublisher(
+            args.mqtt_host, args.mqtt_port, args.mqtt_topic_base,
+            username=mqtt_cfg.get("username"),
+            password=mqtt_cfg.get("password"),
+        )
         log.info("MQTT output enabled: %s:%s topic=%s", args.mqtt_host, args.mqtt_port, args.mqtt_topic_base)
 
     # normalize group_by
