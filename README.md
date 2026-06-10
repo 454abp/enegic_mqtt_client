@@ -75,21 +75,38 @@ Helpful flags:
 
 ## 🛠️ Docker
 
-Build the image on your Raspberry Pi (or any machine with Docker):
+### docker-compose (recommended)
+
+A `docker-compose.yml` is included. Copy `config.yaml` next to it and start:
+
+```bash
+docker compose up -d
+```
+
+This mounts `config.yaml` read-only, creates a named `logs` volume for the rotating log files, and caps the Docker JSON log at 10 MB × 5 files.
+
+### Manual docker run
 
 ```bash
 docker build -t enegic-mqtt .
-```
 
-Run the container with your configuration file mounted:
-
-```bash
 docker run -d \
   --name enegic-mqtt \
-  -v /path/to/config.yaml:/config/config.yaml:ro \
-  -e ENEGIC_CONFIG_FILE=/config/config.yaml \
+  --log-opt max-size=10m --log-opt max-file=5 \
+  -v /path/to/config.yaml:/app/config.yaml:ro \
+  -v enegic-logs:/logs \
+  -e ENEGIC_CONFIG_FILE=/app/config.yaml \
   enegic-mqtt
 ```
+
+### Log tuning (environment variables)
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENEGIC_LOG_FILE` | `/logs/enegic_mqtt.log` | Path inside the container |
+| `ENEGIC_LOG_MAX_BYTES` | `10485760` (10 MB) | Rotate when file exceeds this size |
+| `ENEGIC_LOG_BACKUPS` | `5` | Number of rotated files to keep |
+| `ENEGIC_LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` |
 
 ---
 
@@ -212,25 +229,41 @@ Persistence and backup depend on your chosen InfluxDB setup.
 
 ### 🔍 Logs
 
-* **Python script:** Logs to stdout and Docker logs.
+The container writes timestamped logs to two places simultaneously:
 
-  ```bash
-  docker logs -f enegic-mqtt
-  ```
+**1. Docker log (stdout) — capped via log driver:**
 
-  Typical entries:
+```bash
+# Follow live output
+docker logs -f enegic-mqtt
 
-  * Successful API polling cycles
-  * MQTT publish confirmations
-  * Connection or timeout errors
+# Last 100 lines
+docker logs --tail 100 enegic-mqtt
+```
 
-* **Telegraf:**
+**2. Rotating file log — survives container restarts via the `logs` volume:**
 
-  ```bash
-  docker logs -f telegraf
-  ```
+```bash
+# Live tail from inside the container
+docker exec enegic-mqtt tail -f /logs/enegic_mqtt.log
 
-  Shows connection status to MQTT and InfluxDB.
+# Copy the current log to the host
+docker cp enegic-mqtt:/logs/enegic_mqtt.log ./enegic_mqtt.log
+
+# List all rotated files
+docker exec enegic-mqtt ls -lh /logs/
+```
+
+Rotated files are named `enegic_mqtt.log.1`, `.2`, … up to `.5` (oldest).  
+Each file is capped at 10 MB, so the total on-disk footprint is ≤ 50 MB.
+
+**Telegraf:**
+
+```bash
+docker logs -f telegraf
+```
+
+Shows connection status to MQTT and InfluxDB.
 
 ### 🧠 Debugging MQTT traffic
 

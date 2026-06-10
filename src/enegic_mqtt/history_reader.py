@@ -168,7 +168,7 @@ class MQTTPublisher:
 
         # If ts has no timezone, assume UTC and append Z
         if isinstance(ts, str) and ("Z" not in ts) and ("+" not in ts) and ("-" not in ts[10:]):
-        ts = ts + "Z"
+            ts = ts + "Z"
 
         vals = sample.get("data", {}) if isinstance(sample, dict) else {}
 
@@ -177,31 +177,31 @@ class MQTTPublisher:
         self.publish_json(topic, payload)
 
 
+    def publish_as_live_topics(self, device_id: str, resolution: str, sample: dict):
+        ts = sample.get("ts")
+        vals = sample.get("data", {}) or {}
+        res = resolution.lower()
 
-def publish_as_live_topics(self, device_id: str, resolution: str, sample: dict):
-    ts = sample.get("ts")
-    vals = sample.get("data", {}) or {}
-    res = resolution.lower()
+        def pub(metric: str, value: float | int):
+            topic = f"enegic/{device_id}/phase/{res}/{metric}"
+            self.publish_json(topic, {"ts": ts, "value": value})
 
-    def pub(metric: str, value: float | int):
-        topic = f"enegic/{device_id}/phase/{res}/{metric}"
-        self.publish_json(topic, {"ts": ts, "value": value})
+        # Example mapping (adjust to your API keys)
+        # If hiavg/huavg are per-phase lists:
+        hiavg = vals.get("hiavg")
+        if isinstance(hiavg, list) and len(hiavg) >= 3:
+            pub("current_L1", hiavg[0]); pub("current_L2", hiavg[1]); pub("current_L3", hiavg[2])
 
-    # Example mapping (adjust to your API keys)
-    # If hiavg/huavg are per-phase lists:
-    hiavg = vals.get("hiavg")
-    if isinstance(hiavg, list) and len(hiavg) >= 3:
-        pub("current_L1", hiavg[0]); pub("current_L2", hiavg[1]); pub("current_L3", hiavg[2])
+        huavg = vals.get("huavg")
+        if isinstance(huavg, list) and len(huavg) >= 3:
+            pub("voltage_L1", huavg[0]); pub("voltage_L2", huavg[1]); pub("voltage_L3", huavg[2])
 
-    huavg = vals.get("huavg")
-    if isinstance(huavg, list) and len(huavg) >= 3:
-        pub("voltage_L1", huavg[0]); pub("voltage_L2", huavg[1]); pub("voltage_L3", huavg[2])
+        # If you have totals for import/export you want:
+        if isinstance(vals.get("energy_import"), (int, float)):
+            pub("energy_import", vals["energy_import"])
+        if isinstance(vals.get("energy_export"), (int, float)):
+            pub("energy_export", vals["energy_export"])
 
-    # If you have totals for import/export you want:
-    if isinstance(vals.get("energy_import"), (int,float)):
-        pub("energy_import", vals["energy_import"])
-    if isinstance(vals.get("energy_export"), (int,float)):
-        pub("energy_export", vals["energy_export"])
 
 def main():
     cfg = load_config()

@@ -18,3 +18,5 @@ build/
 .site_cache.json
 config.yaml
 config.yaml
+
+CLAUDE.md

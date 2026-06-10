@@ -9,6 +9,9 @@ from .enegic_client import (
     get_account_overview,
     get_latest_packets,
 )
+from .log_setup import setup_logging
+
+log = setup_logging()
 
 cfg = load_config()
 mqtt_cfg = cfg["mqtt"]
@@ -30,7 +33,7 @@ def publish(client, topic, payload):
     if isinstance(payload, (dict, list)):
         payload = json.dumps(payload)
     client.publish(topic, payload, qos=QOS, retain=RETAIN)
-    print(f"📤 {topic} = {payload}")
+    log.info("publish %s = %s", topic, payload)
 
 
 
@@ -58,9 +61,9 @@ def publish_phase_data(client, base_topic, packets):
         if energy_out is not None:
             publish(client, f"{period_topic}/energy_export", round(energy_out, 3))
 
-        print(
-            f"📤 {period_topic}: Iavg={currents}, Uavg={voltages}, "
-            f"Wi={energy_in}, Wo={energy_out}"
+        log.info(
+            "phase %s: Iavg=%s Uavg=%s Wi=%s Wo=%s",
+            period_topic, currents, voltages, energy_in, energy_out,
         )
 
 
@@ -88,8 +91,27 @@ def main():
     if TLS:
         client.tls_set()
 
+
+    def on_connect(c, u, flags, rc):
+        if rc == 0:
+            log.info("MQTT connected (rc=%s)", rc)
+        else:
+            log.error("MQTT connect failed (rc=%s)", rc)
+
+    def on_disconnect(c, u, rc):
+        log.warning("MQTT disconnected (rc=%s) — will auto-reconnect", rc)
+
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+
+    
+
+    client.reconnect_delay_set(min_delay=1, max_delay=60)
+
     client.connect(BROKER, PORT, 60)
-    print(f"✅ Connected to MQTT broker {BROKER}:{PORT} (TLS={TLS})")
+    client.loop_start()   # ← KRITISCH: Network-Loop starten
+    log.info("Connected to MQTT broker %s:%s (TLS=%s)", BROKER, PORT, TLS)
+
 
     while True:
         overview = get_account_overview()
@@ -115,7 +137,7 @@ def main():
             elif "HubState" in packets:
                 publish_hub_state(client, base_topic, device_data)
 
-        print(f"⏳ Sleeping for {POLL_INTERVAL}s …\n")
+        log.info("Sleeping for %ss", POLL_INTERVAL)
         time.sleep(POLL_INTERVAL)
 
 

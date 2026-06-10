@@ -1,6 +1,10 @@
+import logging
+
 import requests
 
 from .token_manager import get_token, invalidate_token
+
+log = logging.getLogger("enegic_mqtt")
 
 API_BASE = "https://api.enegic.com"
 
@@ -80,38 +84,39 @@ def extract_hub_state_data(device_data: dict) -> dict:
 
 
 def main() -> None:
-    print("📡 Fetching device overview from Enegic …")
+    log.info("Fetching device overview from Enegic")
     overview = get_account_overview()
     items = overview.get("Items", [])
-    print(f"✅ Found {len(items)} device(s)")
+    log.info("Found %d device(s)", len(items))
 
     for item in items:
         item_id = item.get("ItemId")
         name = item.get("Name")
-        print(f"\n➡️  Live data for {name} (ItemId={item_id})")
+        log.info("Live data for %s (ItemId=%s)", name, item_id)
 
         all_data = get_latest_packets(item_id)
         if not isinstance(all_data, list) or not all_data:
-            print("⚠️  No data returned")
+            log.warning("No data returned")
             continue
 
         device_data = next((d for d in all_data if d.get("ItemId") == item_id), None)
         if not device_data:
-            print(f"⚠️  No record found for ItemId={item_id}")
+            log.warning("No record found for ItemId=%s", item_id)
             continue
 
         packets = device_data.get("LatestPackets", {})
 
         if "PhaseRealTime" in packets:
             parsed = extract_realtime_phase_data(device_data)
-            print(f"Iavg = {parsed['current_avg']}, Uavg = {parsed['voltage_avg']}")
+            log.info("Iavg=%s Uavg=%s", parsed["current_avg"], parsed["voltage_avg"])
 
         elif "HubState" in packets:
             parsed = extract_hub_state_data(device_data)
-            print(
-                f"🔌 Hub {parsed['charger_id']}  |  Connected: {parsed['connected']}  |  State: {parsed['charging_state']}"
+            log.info(
+                "Hub %s | Connected: %s | State: %s | Currents (mA): %s",
+                parsed["charger_id"], parsed["connected"],
+                parsed["charging_state"], parsed["current_mA"],
             )
-            print(f"Currents (mA): {parsed['current_mA']}")
 
 
 if __name__ == "__main__":
